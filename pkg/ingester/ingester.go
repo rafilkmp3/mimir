@@ -1050,7 +1050,7 @@ func (i *Ingester) pushSamplesToAppender(userID string, timeseries []mimirpb.Pre
 					}
 
 					var err error
-					if _, err = app.AppendExemplar(ref, nil, e); err == nil {
+					if _, err = app.AppendExemplar(ref, copiedLabels, e); err == nil {
 						stats.succeededExemplarsCount++
 						continue
 					}
