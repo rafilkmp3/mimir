@@ -87,9 +87,15 @@ func TestActiveSeries_UpdateSeries_WithMatchers(t *testing.T) {
 }
 
 func TestActiveSeries_ShouldCorrectlyHandleHashCollisions(t *testing.T) {
-	// These two series have the same XXHash; for algo see https://github.com/Cyan4973/xxHash/issues/54#issuecomment-414061026
-	ls1 := labels.FromStrings("_z~!!a+0", "interesting_data_here_", "zzzzz%!z", "more_interesting_data_here")
-	ls2 := labels.FromStrings("_z-m\xaew\xa3\xc0", "interesting_data_here_", "zzzzz\xa5|z", "more_interesting_data_here")
+	// These two series have the same XXHash; thanks to https://github.com/pstibrany/labels_hash_collisions
+	ls1 := labels.FromStrings("__name__", "metric", "lbl1", "value", "lbl2", "l6CQ5y")
+	ls2 := labels.FromStrings("__name__", "metric", "lbl1", "value", "lbl2", "v7uDlF")
+
+	if ls1.Hash() != ls2.Hash() {
+		// These ones are the same when using -tags stringlabels
+		ls1 = labels.FromStrings("__name__", "metric", "lbl", "HFnEaGl")
+		ls2 = labels.FromStrings("__name__", "metric", "lbl", "RqcXatm")
+	}
 
 	require.True(t, ls1.Hash() == ls2.Hash())
 	c := NewActiveSeries(&Matchers{}, DefaultTimeout)
