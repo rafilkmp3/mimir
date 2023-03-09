@@ -891,7 +891,7 @@ func clampLastChunkLength(series []seriesChunkRefs, nextSeriesChunkMetas []chunk
 }
 
 const (
-	chunksRangesPerSeries = 2
+	chunksRangesPerSeries = 1
 	minChunksPerRange     = 10
 )
 
