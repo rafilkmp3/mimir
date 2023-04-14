@@ -272,7 +272,7 @@
             sum by (%(alert_aggregation_labels)s, deployment) (
               label_replace(
                 label_replace(
-                  node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate,
+                  sum by (%(alert_aggregation_labels)s, namespace, %(per_instance_label)s, container)(rate(container_cpu_usage_seconds_total[1m])),
                   "deployment", "$1", "%(per_instance_label)s", "(.*)-(?:([0-9]+)|([a-z0-9]+)-([a-z0-9]+))"
                 ),
                 # The question mark in "(.*?)" is used to make it non-greedy, otherwise it

@@ -102,6 +102,7 @@
 * [ENHANCEMENT] Ruler: Add panel description for Read QPS panel in Ruler dashboard to explain values when in remote ruler mode. #4675
 * [BUGFIX] Ruler dashboard: show data for reads from ingesters. #4543
 * [BUGFIX] Pod selector regex for deployments: change `(.*-mimir-)` to `(.*mimir-)`. #4603
+* [BUGFIX] Remove dependency on upstream Kubernetes mixin. #4732
 
 ### Jsonnet
 
