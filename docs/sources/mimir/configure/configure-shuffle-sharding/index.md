@@ -4,7 +4,7 @@ aliases:
   - configuring-shuffle-sharding/
   - ../operators-guide/configure/configure-shuffle-sharding/
 description: Learn how to configure shuffle sharding.
-menuTitle: Configure shuffle sharding
+menuTitle: Shuffle sharding
 title: Configure Grafana Mimir shuffle sharding
 weight: 80
 ---
@@ -181,7 +181,7 @@ You must set this flag on the store-gateway, querier, and ruler.
 
 You can override the store-gateway shard size on a per-tenant basis by setting `store_gateway_tenant_shard_size` in the overrides section of the runtime configuration.
 
-For more information about the store-gateway, refer to [store-gateway]({{< relref "../../operators-guide/architecture/components/store-gateway.md" >}}).
+For more information about the store-gateway, refer to [store-gateway]({{< relref "../../references/architecture/components/store-gateway.md" >}}).
 
 ### Ruler shuffle sharding
 

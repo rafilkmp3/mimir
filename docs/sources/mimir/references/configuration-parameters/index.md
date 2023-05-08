@@ -330,6 +330,10 @@ overrides_exporter:
     # CLI flag: -overrides-exporter.ring.instance-addr
     [instance_addr: <string> | default = ""]
 
+    # (advanced) Enable using a IPv6 instance address. (default false)
+    # CLI flag: -overrides-exporter.ring.instance-enable-ipv6
+    [instance_enable_ipv6: <boolean> | default = false]
+
     # (advanced) Minimum time to wait for ring stability at startup, if set to
     # positive value. Set to 0 to disable.
     # CLI flag: -overrides-exporter.ring.wait-stability-min-duration
@@ -722,6 +726,10 @@ ring:
   # CLI flag: -distributor.ring.instance-addr
   [instance_addr: <string> | default = ""]
 
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -distributor.ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
+
 instance_limits:
   # (advanced) Max ingestion rate (samples/sec) that this distributor will
   # accept. This limit is per-distributor, not per-tenant. Additional push
@@ -741,34 +749,6 @@ instance_limits:
   # per-tenant. Additional requests will be rejected. 0 = unlimited.
   # CLI flag: -distributor.instance-limits.max-inflight-push-requests-bytes
   [max_inflight_push_requests_bytes: <int> | default = 0]
-
-forwarding:
-  # (experimental) Enables the feature to forward certain metrics in
-  # remote_write requests, depending on defined rules.
-  # CLI flag: -distributor.forwarding.enabled
-  [enabled: <boolean> | default = false]
-
-  # (experimental) Maximum concurrency at which forwarding requests get
-  # performed.
-  # CLI flag: -distributor.forwarding.request-concurrency
-  [request_concurrency: <int> | default = 10]
-
-  # (experimental) Timeout for requests to ingestion endpoints to which we
-  # forward metrics.
-  # CLI flag: -distributor.forwarding.request-timeout
-  [request_timeout: <duration> | default = 2s]
-
-  # (experimental) If disabled then forwarding requests are always considered to
-  # be successful, errors are ignored.
-  # CLI flag: -distributor.forwarding.propagate-errors
-  [propagate_errors: <boolean> | default = true]
-
-  # Configures the gRPC client used to communicate between the distributors and
-  # the configured remote write endpoints used by the metrics forwarding
-  # feature.
-  # The CLI flags prefix for this block configuration is:
-  # distributor.forwarding.grpc-client
-  [grpc_client: <grpc_client>]
 ```
 
 ### ingester
@@ -871,6 +851,10 @@ ring:
   # (advanced) IP address to advertise in the ring. Default is auto-detected.
   # CLI flag: -ingester.ring.instance-addr
   [instance_addr: <string> | default = ""]
+
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -ingester.ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
 
   # (advanced) The availability zone where this instance is running.
   # CLI flag: -ingester.ring.instance-availability-zone
@@ -1334,6 +1318,10 @@ ring:
   # CLI flag: -query-scheduler.ring.instance-addr
   [instance_addr: <string> | default = ""]
 
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -query-scheduler.ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
+
 # (experimental) The maximum number of query-scheduler instances to use,
 # regardless how many replicas are running. This option can be set only when
 # -query-scheduler.service-discovery-mode is set to 'ring'. 0 to use all
@@ -1553,6 +1541,10 @@ ring:
   # CLI flag: -ruler.ring.instance-addr
   [instance_addr: <string> | default = ""]
 
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -ruler.ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
+
   # (advanced) Number of tokens for each ruler.
   # CLI flag: -ruler.ring.num-tokens
   [num_tokens: <int> | default = 128]
@@ -1750,6 +1742,10 @@ sharding_ring:
   # (advanced) IP address to advertise in the ring. Default is auto-detected.
   # CLI flag: -alertmanager.sharding-ring.instance-addr
   [instance_addr: <string> | default = ""]
+
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -alertmanager.sharding-ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
 
   # (advanced) The replication factor to use when sharding the alertmanager.
   # CLI flag: -alertmanager.sharding-ring.replication-factor
@@ -1977,7 +1973,6 @@ The `ingester_client` block configures how the distributors connect to the inges
 
 The `grpc_client` block configures the gRPC client used to communicate between two Mimir components. The supported CLI flags `<prefix>` used to reference this configuration block are:
 
-- `distributor.forwarding.grpc-client`
 - `ingester.client`
 - `querier.frontend-client`
 - `query-frontend.grpc-client-config`
@@ -2720,7 +2715,7 @@ The `limits` block configures default and per-tenant limits imposed by component
 # expression matcher longer than the configured number of bytes. 0 to disable
 # the limit.
 # CLI flag: -query-frontend.query-sharding-max-regexp-size-bytes
-[query_sharding_max_regexp_size_bytes: <int> | default = 0]
+[query_sharding_max_regexp_size_bytes: <int> | default = 4096]
 
 # (experimental) Split instant queries by an interval and execute in parallel. 0
 # to disable it.
@@ -2844,6 +2839,11 @@ The `limits` block configures default and per-tenant limits imposed by component
 # CLI flag: -compactor.block-upload-verify-chunks
 [compactor_block_upload_verify_chunks: <boolean> | default = true]
 
+# (advanced) Maximum size in bytes of a block that is allowed to be uploaded or
+# validated. 0 = no limit.
+# CLI flag: -compactor.block-upload-max-block-size-bytes
+[compactor_block_upload_max_block_size_bytes: <int> | default = 0]
+
 # S3 server-side encryption type. Required to enable server-side encryption
 # overrides for a specific tenant. If not set, the default S3 client settings
 # are used.
@@ -2918,19 +2918,6 @@ The `limits` block configures default and per-tenant limits imposed by component
 # alerts will fail with a log message and metric increment. 0 = no limit.
 # CLI flag: -alertmanager.max-alerts-size-bytes
 [alertmanager_max_alerts_size_bytes: <int> | default = 0]
-
-# Remote-write endpoint where metrics specified in forwarding_rules are
-# forwarded to. If set, takes precedence over endpoints specified in forwarding
-# rules.
-[forwarding_endpoint: <string> | default = ""]
-
-# If set, forwarding drops samples that are older than this duration. If unset
-# or 0, no samples get dropped.
-[forwarding_drop_older_than: <int> | default = ]
-
-# Rules based on which the Distributor decides whether a metric should be
-# forwarded to an alternative remote_write API endpoint.
-[forwarding_rules: <map of string to validation.ForwardingRule> | default = ]
 ```
 
 ### blocks_storage
@@ -3584,6 +3571,10 @@ sharding_ring:
   # CLI flag: -compactor.ring.instance-addr
   [instance_addr: <string> | default = ""]
 
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -compactor.ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
+
   # (advanced) Minimum time to wait for ring stability at startup. 0 to disable.
   # CLI flag: -compactor.ring.wait-stability-min-duration
   [wait_stability_min_duration: <duration> | default = 0s]
@@ -3708,6 +3699,10 @@ sharding_ring:
   # (advanced) IP address to advertise in the ring. Default is auto-detected.
   # CLI flag: -store-gateway.sharding-ring.instance-addr
   [instance_addr: <string> | default = ""]
+
+  # (advanced) Enable using a IPv6 instance address. (default false)
+  # CLI flag: -store-gateway.sharding-ring.instance-enable-ipv6
+  [instance_enable_ipv6: <boolean> | default = false]
 
   # The availability zone where this instance is running. Required if
   # zone-awareness is enabled.

@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/grafana/dskit/services"
 	"github.com/grafana/dskit/test"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/weaveworks/common/user"
@@ -35,9 +36,12 @@ func TestRuler_PrometheusRules(t *testing.T) {
 	)
 
 	testCases := map[string]struct {
-		configuredRules rulespb.RuleGroupList
-		limits          RulesLimits
-		expectedRules   []*RuleGroup
+		configuredRules    rulespb.RuleGroupList
+		limits             RulesLimits
+		expectedStatusCode int
+		expectedErrorType  v1.ErrorType
+		expectedRules      []*RuleGroup
+		queryParams        string
 	}{
 		"should load and evaluate the configured rules": {
 			configuredRules: rulespb.RuleGroupList{
@@ -263,6 +267,72 @@ func TestRuler_PrometheusRules(t *testing.T) {
 				},
 			},
 		},
+		"API returns only alerts": {
+			configuredRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace1",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Interval:  interval,
+				},
+			},
+			queryParams: "?type=alert",
+			limits:      validation.MockDefaultOverrides(),
+			expectedRules: []*RuleGroup{
+				{
+					Name: "group1",
+					File: "namespace1",
+					Rules: []rule{
+						&alertingRule{
+							Name:   "UP_ALERT",
+							Query:  "up < 1",
+							State:  "inactive",
+							Health: "unknown",
+							Type:   "alerting",
+							Alerts: []*Alert{},
+						},
+					},
+					Interval: 60,
+				},
+			},
+		},
+		"API returns only rules": {
+			configuredRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace1",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Interval:  interval,
+				},
+			},
+			queryParams: "?type=record",
+			limits:      validation.MockDefaultOverrides(),
+			expectedRules: []*RuleGroup{
+				{
+					Name: "group1",
+					File: "namespace1",
+					Rules: []rule{
+						&recordingRule{
+							Name:   "UP_RULE",
+							Query:  "up",
+							Health: "unknown",
+							Type:   "recording",
+						},
+					},
+					Interval: 60,
+				},
+			},
+		},
+		"Invalid type param": {
+			configuredRules:    rulespb.RuleGroupList{},
+			queryParams:        "?type=foo",
+			limits:             validation.MockDefaultOverrides(),
+			expectedStatusCode: http.StatusBadRequest,
+			expectedErrorType:  v1.ErrBadData,
+			expectedRules:      []*RuleGroup{},
+		},
 	}
 
 	for name, tc := range testCases {
@@ -296,18 +366,27 @@ func TestRuler_PrometheusRules(t *testing.T) {
 
 			a := NewAPI(r, r.store, log.NewNopLogger())
 
-			req := requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/api/v1/rules", nil, userID)
+			req := requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/api/v1/rules"+tc.queryParams, nil, userID)
 			w := httptest.NewRecorder()
 			a.PrometheusRules(w, req)
 
 			resp := w.Result()
 			body, _ := io.ReadAll(resp.Body)
+			if tc.expectedStatusCode != 0 {
+				require.Equal(t, tc.expectedStatusCode, resp.StatusCode)
+			} else {
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+			}
 
-			// Check status code and status response
 			responseJSON := response{}
 			err := json.Unmarshal(body, &responseJSON)
 			require.NoError(t, err)
-			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			if tc.expectedErrorType != "" {
+				assert.Equal(t, "error", responseJSON.Status)
+				assert.Equal(t, tc.expectedErrorType, responseJSON.ErrorType)
+				return
+			}
 			require.Equal(t, responseJSON.Status, "success")
 
 			// Testing the running rules
@@ -646,6 +725,79 @@ rules:
 	}
 
 	// define once so the requests build on each other so the number of rules can be tested
+	router := mux.NewRouter()
+	router.Path("/prometheus/config/v1/rules/{namespace}").Methods("POST").HandlerFunc(a.CreateRuleGroup)
+
+	for _, tt := range tc {
+		t.Run(tt.name, func(t *testing.T) {
+			// POST
+			req := requestFor(t, http.MethodPost, "https://localhost:8080/prometheus/config/v1/rules/namespace", strings.NewReader(tt.input), "user1")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+			require.Equal(t, tt.status, w.Code)
+			require.Equal(t, tt.output, w.Body.String())
+		})
+	}
+}
+
+func TestRuler_RulerGroupLimitsDisabled(t *testing.T) {
+	cfg := defaultRulerConfig(t)
+
+	r := prepareRuler(t, cfg, newMockRuleStore(make(map[string]rulespb.RuleGroupList)), withStart(), withLimits(validation.MockOverrides(func(defaults *validation.Limits, _ map[string]*validation.Limits) {
+		defaults.RulerMaxRuleGroupsPerTenant = 0
+		defaults.RulerMaxRulesPerRuleGroup = 0
+	})))
+
+	a := NewAPI(r, r.store, log.NewNopLogger())
+
+	tc := []struct {
+		name   string
+		input  string
+		output string
+		err    error
+		status int
+	}{
+		{
+			name:   "when pushing the first group with disabled limit",
+			status: 202,
+			input: `
+name: test_first_group_will_succeed
+interval: 15s
+rules:
+- record: up_rule
+  expr: up{}
+- alert: up_alert
+  expr: sum(up{}) > 1
+  for: 30s
+  annotations:
+    test: test
+  labels:
+    test: test
+`,
+			output: "{\"status\":\"success\",\"data\":null,\"errorType\":\"\",\"error\":\"\"}",
+		},
+		{
+			name:   "when pushing the second group with disabled limit",
+			status: 202,
+			input: `
+name: test_second_group_will_also_succeed
+interval: 15s
+rules:
+- record: up_rule
+  expr: up{}
+- alert: up_alert
+  expr: sum(up{}) > 1
+  for: 30s
+  annotations:
+    test: test
+  labels:
+    test: test
+`,
+			output: "{\"status\":\"success\",\"data\":null,\"errorType\":\"\",\"error\":\"\"}",
+		},
+	}
+
 	router := mux.NewRouter()
 	router.Path("/prometheus/config/v1/rules/{namespace}").Methods("POST").HandlerFunc(a.CreateRuleGroup)
 
