@@ -126,6 +126,11 @@ where `default_value` is the value to use if the environment variable is undefin
 # CLI flag: -max-separate-metrics-groups-per-user
 [max_separate_metrics_groups_per_user: <int> | default = 1000]
 
+# (advanced) Set to true to enable all Go runtime metrics, such as go_sched_*
+# and go_memstats_*.
+# CLI flag: -enable-go-runtime-metrics
+[enable_go_runtime_metrics: <boolean> | default = false]
+
 api:
   # (advanced) Allows to skip label name validation via
   # X-Mimir-SkipLabelNameValidation header on the http write path. Use with
@@ -564,9 +569,19 @@ grpc_tls_config:
 # CLI flag: -server.log-source-ips-regex
 [log_source_ips_regex: <string> | default = ""]
 
+# Optionally log request headers.
+# CLI flag: -server.log-request-headers
+[log_request_headers: <boolean> | default = false]
+
 # (advanced) Optionally log requests at info level instead of debug level.
+# Applies to request headers as well if server.log-request-headers is enabled.
 # CLI flag: -server.log-request-at-info-level-enabled
 [log_request_at_info_level_enabled: <boolean> | default = false]
+
+# Comma separated list of headers to exclude from loggin. Only used if
+# server.log-request-headers is true.
+# CLI flag: -server.log-request-headers-exclude-list
+[log_request_exclude_headers_list: <string> | default = ""]
 
 # (advanced) Base path to serve all API routes from (e.g. /v1/)
 # CLI flag: -server.path-prefix
@@ -961,11 +976,6 @@ The `querier` block configures the querier.
 # -querier.iterators flag.
 # CLI flag: -querier.batch-iterators
 [batch_iterators: <boolean> | default = true]
-
-# (advanced) Maximum lookback beyond which queries are not sent to ingester. 0
-# means all queries are sent to ingester.
-# CLI flag: -querier.query-ingesters-within
-[query_ingesters_within: <duration> | default = 13h]
 
 # (advanced) The time after which a metric should be queried from storage and
 # not just ingesters. 0 means all queries are sent to store. If this option is
@@ -1640,6 +1650,20 @@ local:
   # Directory to scan for rules
   # CLI flag: -ruler-storage.local.directory
   [directory: <string> | default = ""]
+
+cache:
+  # Backend for ruler storage cache, if not empty. The cache is supported for
+  # any storage backend except "local". Supported values: memcached, redis.
+  # CLI flag: -ruler-storage.cache.backend
+  [backend: <string> | default = ""]
+
+  # The memcached block configures the Memcached-based caching backend.
+  # The CLI flags prefix for this block configuration is: ruler-storage.cache
+  [memcached: <memcached>]
+
+  # The redis block configures the Redis-based caching backend.
+  # The CLI flags prefix for this block configuration is: ruler-storage.cache
+  [redis: <redis>]
 ```
 
 ### alertmanager
@@ -1899,6 +1923,12 @@ alertmanager_client:
 # notifications.
 # CLI flag: -alertmanager.persist-interval
 [persist_interval: <duration> | default = 15m]
+
+# (advanced) Enables periodic cleanup of alertmanager stateful data
+# (notification logs and silences) from object storage. When enabled, data is
+# removed for any tenant that does not have a configuration.
+# CLI flag: -alertmanager.enable-state-cleanup
+[enable_state_cleanup: <boolean> | default = true]
 ```
 
 ### alertmanager_storage
@@ -2722,6 +2752,11 @@ The `limits` block configures default and per-tenant limits imposed by component
 # CLI flag: -query-frontend.split-instant-queries-by-interval
 [split_instant_queries_by_interval: <duration> | default = 0s]
 
+# (advanced) Maximum lookback beyond which queries are not sent to ingester. 0
+# means all queries are sent to ingester.
+# CLI flag: -querier.query-ingesters-within
+[query_ingesters_within: <duration> | default = 13h]
+
 # Limit the total query time range (end - start time). This limit is enforced in
 # the query-frontend on the received query.
 # CLI flag: -query-frontend.max-total-query-length
@@ -2825,7 +2860,7 @@ The `limits` block configures default and per-tenant limits imposed by component
 # value is 4h0m0s: a lower value will be ignored and the feature disabled. 0 to
 # disable.
 # CLI flag: -compactor.partial-block-deletion-delay
-[compactor_partial_block_deletion_delay: <duration> | default = 0s]
+[compactor_partial_block_deletion_delay: <duration> | default = 1d]
 
 # Enable block upload API for the tenant.
 # CLI flag: -compactor.block-upload-enabled
@@ -2881,7 +2916,7 @@ The `limits` block configures default and per-tenant limits imposed by component
 # is given in JSON format. Rate limit has the same meaning as
 # -alertmanager.notification-rate-limit, but only applies for specific
 # integration. Allowed integration names: webhook, email, pagerduty, opsgenie,
-# wechat, slack, victorops, pushover, sns.
+# wechat, slack, victorops, pushover, sns, webex, telegram, discord.
 # CLI flag: -alertmanager.notification-rate-limit-per-integration
 [alertmanager_notification_rate_limit_per_integration: <map of string to float64> | default = {}]
 
@@ -3175,16 +3210,16 @@ bucket_store:
   # CLI flag: -blocks-storage.bucket-store.ignore-blocks-within
   [ignore_blocks_within: <duration> | default = 10h]
 
-  # (advanced) Max size - in bytes - of a chunks pool, used to reduce memory
+  # (deprecated) Max size - in bytes - of a chunks pool, used to reduce memory
   # allocations. The pool is shared across all tenants. 0 to disable the limit.
   # CLI flag: -blocks-storage.bucket-store.max-chunk-pool-bytes
   [max_chunk_pool_bytes: <int> | default = 2147483648]
 
-  # (advanced) Size - in bytes - of the smallest chunks pool bucket.
+  # (deprecated) Size - in bytes - of the smallest chunks pool bucket.
   # CLI flag: -blocks-storage.bucket-store.chunk-pool-min-bucket-size-bytes
   [chunk_pool_min_bucket_size_bytes: <int> | default = 16000]
 
-  # (advanced) Size - in bytes - of the largest chunks pool bucket.
+  # (deprecated) Size - in bytes - of the largest chunks pool bucket.
   # CLI flag: -blocks-storage.bucket-store.chunk-pool-max-bucket-size-bytes
   [chunk_pool_max_bucket_size_bytes: <int> | default = 50000000]
 
@@ -3722,6 +3757,7 @@ The `memcached` block configures the Memcached-based caching backend. The suppor
 - `blocks-storage.bucket-store.index-cache`
 - `blocks-storage.bucket-store.metadata-cache`
 - `query-frontend.results-cache`
+- `ruler-storage.cache`
 
 &nbsp;
 
@@ -3850,6 +3886,7 @@ The `redis` block configures the Redis-based caching backend. The supported CLI 
 - `blocks-storage.bucket-store.index-cache`
 - `blocks-storage.bucket-store.metadata-cache`
 - `query-frontend.results-cache`
+- `ruler-storage.cache`
 
 &nbsp;
 

@@ -21,13 +21,171 @@ import (
 	"github.com/grafana/dskit/services"
 	"github.com/grafana/dskit/test"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/model/rulefmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/weaveworks/common/user"
+	"gopkg.in/yaml.v3"
 
 	"github.com/grafana/mimir/pkg/ruler/rulespb"
 	"github.com/grafana/mimir/pkg/util/validation"
 )
+
+func TestRuler_ListRules(t *testing.T) {
+	const (
+		userID   = "user1"
+		interval = time.Minute
+	)
+
+	testCases := map[string]struct {
+		requestPath        string
+		configuredRules    rulespb.RuleGroupList
+		missingRules       rulespb.RuleGroupList
+		expectedStatusCode int
+		expectedRules      map[string][]rulefmt.RuleGroup
+		expectedErr        string
+	}{
+		"should list all rule groups of an user if the namespace parameter is missing": {
+			requestPath: "/prometheus/config/v1/rules",
+			configuredRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace1",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
+					Interval:  interval,
+				},
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace2",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("COUNT_UP_RULE", "count(up)")},
+					Interval:  interval,
+				},
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedRules: map[string][]rulefmt.RuleGroup{
+				"namespace1": {
+					rulespb.FromProto(&rulespb.RuleGroupDesc{
+						Name:      "group1",
+						Namespace: "namespace1",
+						User:      userID,
+						Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
+						Interval:  interval,
+					}),
+				},
+				"namespace2": {
+					rulespb.FromProto(&rulespb.RuleGroupDesc{
+						Name:      "group1",
+						Namespace: "namespace2",
+						User:      userID,
+						Rules:     []*rulespb.RuleDesc{createRecordingRule("COUNT_UP_RULE", "count(up)")},
+						Interval:  interval,
+					}),
+				},
+			},
+		},
+		"should list all rule groups of an user belonging to the input namespace": {
+			requestPath: "/prometheus/config/v1/rules/namespace1",
+			configuredRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace1",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
+					Interval:  interval,
+				},
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace2",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("COUNT_UP_RULE", "count(up)")},
+					Interval:  interval,
+				},
+			},
+			expectedStatusCode: http.StatusOK,
+			expectedRules: map[string][]rulefmt.RuleGroup{
+				"namespace1": {
+					rulespb.FromProto(&rulespb.RuleGroupDesc{
+						Name:      "group1",
+						Namespace: "namespace1",
+						User:      userID,
+						Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
+						Interval:  interval,
+					}),
+				},
+			},
+		},
+		"should fail if some rule groups were missing when loading them": {
+			requestPath: "/prometheus/config/v1/rules",
+			configuredRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace1",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
+					Interval:  interval,
+				},
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace2",
+					User:      userID,
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("COUNT_UP_RULE", "count(up)")},
+					Interval:  interval,
+				},
+			},
+			missingRules: rulespb.RuleGroupList{
+				&rulespb.RuleGroupDesc{
+					Name:      "group1",
+					Namespace: "namespace3",
+					User:      userID,
+				},
+			},
+			expectedStatusCode: http.StatusInternalServerError,
+			expectedErr:        "an error occurred while loading 1 rule groups",
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			// Pre-condition check: ensure all rules have the user set.
+			for _, rule := range tc.configuredRules {
+				assert.Equal(t, userID, rule.User)
+			}
+
+			cfg := defaultRulerConfig(t)
+			cfg.TenantFederation.Enabled = true
+
+			store := newMockRuleStore(map[string]rulespb.RuleGroupList{userID: tc.configuredRules})
+			store.setMissingRuleGroups(tc.missingRules)
+
+			r := prepareRuler(t, cfg, store, withStart())
+			a := NewAPI(r, r.directStore, log.NewNopLogger())
+
+			router := mux.NewRouter()
+			router.Path("/prometheus/config/v1/rules").Methods("GET").HandlerFunc(a.ListRules)
+			router.Path("/prometheus/config/v1/rules/{namespace}").Methods("GET").HandlerFunc(a.ListRules)
+			req := requestFor(t, http.MethodGet, "https://localhost:8080"+tc.requestPath, nil, userID)
+
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			resp := w.Result()
+			body, _ := io.ReadAll(resp.Body)
+			require.Equal(t, tc.expectedStatusCode, resp.StatusCode)
+
+			if tc.expectedStatusCode >= 200 && tc.expectedStatusCode < 300 {
+				expectedYAML, err := yaml.Marshal(tc.expectedRules)
+				require.NoError(t, err)
+				require.YAMLEq(t, string(expectedYAML), string(body))
+			} else {
+				require.Contains(t, string(body), tc.expectedErr)
+			}
+		})
+
+	}
+}
 
 func TestRuler_PrometheusRules(t *testing.T) {
 	const (
@@ -49,7 +207,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -84,7 +242,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -115,7 +273,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -148,7 +306,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -165,7 +323,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      ")(_+?/|group1+/?",
 					Namespace: ")(_+?/|namespace1+/?",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -201,7 +359,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Namespace:     "namespace1",
 					User:          userID,
 					SourceTenants: []string{"tenant-1"},
-					Rules:         []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:         []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:      interval,
 				},
 			},
@@ -273,7 +431,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -303,7 +461,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 					Name:      "group1",
 					Namespace: "namespace1",
 					User:      userID,
-					Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+					Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 					Interval:  interval,
 				},
 			},
@@ -345,16 +503,11 @@ func TestRuler_PrometheusRules(t *testing.T) {
 			cfg := defaultRulerConfig(t)
 			cfg.TenantFederation.Enabled = true
 
-			rulerAddrMap := map[string]*Ruler{}
-
 			storageRules := map[string]rulespb.RuleGroupList{
 				userID: tc.configuredRules,
 			}
 
-			r := prepareRuler(t, cfg, newMockRuleStore(storageRules), withRulerAddrMap(rulerAddrMap), withLimits(tc.limits), withStart())
-
-			// Make sure mock grpc client can find this instance, based on instance address registered in the ring.
-			rulerAddrMap[r.lifecycler.GetInstanceAddr()] = r
+			r := prepareRuler(t, cfg, newMockRuleStore(storageRules), withRulerAddrAutomaticMapping(), withLimits(tc.limits), withStart())
 
 			// Rules will be synchronized asynchronously, so we wait until the expected number of rule groups
 			// has been synched.
@@ -364,7 +517,7 @@ func TestRuler_PrometheusRules(t *testing.T) {
 				return len(rls.Groups)
 			})
 
-			a := NewAPI(r, r.store, log.NewNopLogger())
+			a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 			req := requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/api/v1/rules"+tc.queryParams, nil, userID)
 			w := httptest.NewRecorder()
@@ -407,16 +560,11 @@ func TestRuler_PrometheusRules(t *testing.T) {
 func TestRuler_PrometheusAlerts(t *testing.T) {
 	cfg := defaultRulerConfig(t)
 
-	rulerAddrMap := map[string]*Ruler{}
-
-	r := prepareRuler(t, cfg, newMockRuleStore(mockRules), withRulerAddrMap(rulerAddrMap))
+	r := prepareRuler(t, cfg, newMockRuleStore(mockRules), withRulerAddrAutomaticMapping())
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), r))
 	t.Cleanup(func() {
 		require.NoError(t, services.StopAndAwaitTerminated(context.Background(), r))
 	})
-
-	// Make sure mock grpc client can find this instance, based on instance address registered in the ring.
-	rulerAddrMap[r.lifecycler.GetInstanceAddr()] = r
 
 	// Rules will be synchronized asynchronously, so we wait until the expected number of rule groups
 	// has been synched.
@@ -426,7 +574,7 @@ func TestRuler_PrometheusAlerts(t *testing.T) {
 		return len(rls.Groups)
 	})
 
-	a := NewAPI(r, r.store, log.NewNopLogger())
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 	req := requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/api/v1/alerts", nil, "user1")
 	w := httptest.NewRecorder()
@@ -454,7 +602,7 @@ func TestRuler_PrometheusAlerts(t *testing.T) {
 	require.Equal(t, string(expectedResponse), string(body))
 }
 
-func TestRuler_Create(t *testing.T) {
+func TestAPI_CreateRuleGroup(t *testing.T) {
 	defaultCfg := defaultRulerConfig(t)
 
 	cfgWithTenantFederation := defaultRulerConfig(t)
@@ -544,8 +692,14 @@ rules:
 
 	for _, tt := range tc {
 		t.Run(tt.name, func(t *testing.T) {
-			r := prepareRuler(t, tt.cfg, newMockRuleStore(make(map[string]rulespb.RuleGroupList)), withStart())
-			a := NewAPI(r, r.store, log.NewNopLogger())
+			// Configure the ruler to only sync the rules based on notifications upon API changes.
+			rulerCfg := tt.cfg
+			rulerCfg.PollInterval = time.Hour
+			rulerCfg.rulerSyncQueuePollFrequency = 100 * time.Millisecond
+
+			reg := prometheus.NewPedanticRegistry()
+			r := prepareRuler(t, rulerCfg, newMockRuleStore(make(map[string]rulespb.RuleGroupList)), withStart(), withRulerAddrAutomaticMapping(), withPrometheusRegisterer(reg))
+			a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 			router := mux.NewRouter()
 			router.Path("/prometheus/config/v1/rules/{namespace}").Methods("POST").HandlerFunc(a.CreateRuleGroup)
@@ -558,6 +712,9 @@ rules:
 			require.Equal(t, tt.status, w.Code)
 
 			if tt.err == nil {
+				// Pre-condition check: the ruler should have run the initial rules sync.
+				verifySyncRulesMetric(t, reg, 1, 0)
+
 				// GET
 				req = requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/config/v1/rules/namespace/test", nil, "user1")
 				w = httptest.NewRecorder()
@@ -565,6 +722,9 @@ rules:
 				router.ServeHTTP(w, req)
 				require.Equal(t, 200, w.Code)
 				require.YAMLEq(t, tt.output, w.Body.String())
+
+				// Ensure it triggered a rules sync notification.
+				verifySyncRulesMetric(t, reg, 1, 1)
 			} else {
 				require.Equal(t, tt.err.Error()+"\n", w.Body.String())
 			}
@@ -572,8 +732,11 @@ rules:
 	}
 }
 
-func TestRuler_DeleteNamespace(t *testing.T) {
+func TestAPI_DeleteNamespace(t *testing.T) {
+	// Configure the ruler to only sync the rules based on notifications upon API changes.
 	cfg := defaultRulerConfig(t)
+	cfg.PollInterval = time.Hour
+	cfg.rulerSyncQueuePollFrequency = 100 * time.Millisecond
 
 	// Keep this inside the test, not as global var, otherwise running tests with -count higher than 1 fails,
 	// as newMockRuleStore modifies the underlying map.
@@ -583,25 +746,29 @@ func TestRuler_DeleteNamespace(t *testing.T) {
 				Name:      "group1",
 				Namespace: "namespace1",
 				User:      "user1",
-				Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP_RULE", "up"), mockAlertingRuleDesc("UP_ALERT", "up < 1")},
+				Rules:     []*rulespb.RuleDesc{createRecordingRule("UP_RULE", "up"), createAlertingRule("UP_ALERT", "up < 1")},
 				Interval:  interval,
 			},
 			&rulespb.RuleGroupDesc{
 				Name:      "fail",
 				Namespace: "namespace2",
 				User:      "user1",
-				Rules:     []*rulespb.RuleDesc{mockRecordingRuleDesc("UP2_RULE", "up"), mockAlertingRuleDesc("UP2_ALERT", "up < 1")},
+				Rules:     []*rulespb.RuleDesc{createRecordingRule("UP2_RULE", "up"), createAlertingRule("UP2_ALERT", "up < 1")},
 				Interval:  interval,
 			},
 		},
 	}
 
-	r := prepareRuler(t, cfg, newMockRuleStore(mockRulesNamespaces), withStart())
-	a := NewAPI(r, r.store, log.NewNopLogger())
+	reg := prometheus.NewPedanticRegistry()
+	r := prepareRuler(t, cfg, newMockRuleStore(mockRulesNamespaces), withStart(), withRulerAddrAutomaticMapping(), withPrometheusRegisterer(reg))
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 	router := mux.NewRouter()
 	router.Path("/prometheus/config/v1/rules/{namespace}").Methods(http.MethodDelete).HandlerFunc(a.DeleteNamespace)
 	router.Path("/prometheus/config/v1/rules/{namespace}/{groupName}").Methods(http.MethodGet).HandlerFunc(a.GetRuleGroup)
+
+	// Pre-condition check: the ruler should have run the initial rules sync.
+	verifySyncRulesMetric(t, reg, 1, 0)
 
 	// Verify namespace1 rules are there.
 	req := requestFor(t, http.MethodGet, "https://localhost:8080/prometheus/config/v1/rules/namespace1/group1", nil, "user1")
@@ -619,6 +786,9 @@ func TestRuler_DeleteNamespace(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code)
 	require.Equal(t, "{\"status\":\"success\",\"data\":null,\"errorType\":\"\",\"error\":\"\"}", w.Body.String())
 
+	// Ensure the namespace deletion triggered a rules sync notification.
+	verifySyncRulesMetric(t, reg, 1, 1)
+
 	// On Partial failures
 	req = requestFor(t, http.MethodDelete, "https://localhost:8080/prometheus/config/v1/rules/namespace2", nil, "user1")
 	w = httptest.NewRecorder()
@@ -626,6 +796,59 @@ func TestRuler_DeleteNamespace(t *testing.T) {
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.Equal(t, "{\"status\":\"error\",\"data\":null,\"errorType\":\"server_error\",\"error\":\"unable to delete rg\"}", w.Body.String())
+}
+
+func TestAPI_DeleteRuleGroup(t *testing.T) {
+	const userID = "user-1"
+
+	// Configure the ruler to only sync the rules based on notifications upon API changes.
+	cfg := defaultRulerConfig(t)
+	cfg.PollInterval = time.Hour
+	cfg.rulerSyncQueuePollFrequency = 100 * time.Millisecond
+
+	// Keep this inside the test, not as global var, otherwise running tests with -count higher than 1 fails,
+	// as newMockRuleStore modifies the underlying map.
+	mockRulesNamespaces := map[string]rulespb.RuleGroupList{
+		userID: {
+			createRuleGroup("group-1", userID, createRecordingRule("UP_RULE", "up")),
+			createRuleGroup("group-2", userID, createRecordingRule("SUM_RULE", "sum")),
+		},
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	r := prepareRuler(t, cfg, newMockRuleStore(mockRulesNamespaces), withStart(), withRulerAddrAutomaticMapping(), withPrometheusRegisterer(reg))
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
+
+	router := mux.NewRouter()
+	router.Path("/prometheus/config/v1/rules/{namespace}/{groupName}").Methods(http.MethodDelete).HandlerFunc(a.DeleteRuleGroup)
+
+	// Pre-condition check: the ruler should have run the initial rules sync.
+	verifySyncRulesMetric(t, reg, 1, 0)
+
+	// Pre-condition check: the tenant should have 2 rule groups.
+	test.Poll(t, time.Second, 2, func() interface{} {
+		actualRuleGroups, err := r.GetRules(user.InjectOrgID(context.Background(), userID), AnyRule)
+		require.NoError(t, err)
+		return len(actualRuleGroups)
+	})
+
+	// Delete group-1.
+	req := requestFor(t, http.MethodDelete, "https://localhost:8080/prometheus/config/v1/rules/test/group-1", nil, userID)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusAccepted, w.Code)
+	require.Equal(t, `{"status":"success","data":null,"errorType":"","error":""}`, w.Body.String())
+
+	// Ensure the namespace deletion triggered a rules sync notification.
+	verifySyncRulesMetric(t, reg, 1, 1)
+
+	// Ensure the rule group has been deleted.
+	test.Poll(t, time.Second, 1, func() interface{} {
+		actualRuleGroups, err := r.GetRules(user.InjectOrgID(context.Background(), userID), AnyRule)
+		require.NoError(t, err)
+		return len(actualRuleGroups)
+	})
 }
 
 func TestRuler_LimitsPerGroup(t *testing.T) {
@@ -636,7 +859,7 @@ func TestRuler_LimitsPerGroup(t *testing.T) {
 		defaults.RulerMaxRulesPerRuleGroup = 1
 	})))
 
-	a := NewAPI(r, r.store, log.NewNopLogger())
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 	tc := []struct {
 		name   string
@@ -689,7 +912,7 @@ func TestRuler_RulerGroupLimits(t *testing.T) {
 		defaults.RulerMaxRulesPerRuleGroup = 1
 	})))
 
-	a := NewAPI(r, r.store, log.NewNopLogger())
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 	tc := []struct {
 		name   string
@@ -749,7 +972,7 @@ func TestRuler_RulerGroupLimitsDisabled(t *testing.T) {
 		defaults.RulerMaxRulesPerRuleGroup = 0
 	})))
 
-	a := NewAPI(r, r.store, log.NewNopLogger())
+	a := NewAPI(r, r.directStore, log.NewNopLogger())
 
 	tc := []struct {
 		name   string

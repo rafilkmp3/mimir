@@ -428,9 +428,14 @@ func (a *API) ListRules(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err = a.store.LoadRuleGroups(req.Context(), map[string]rulespb.RuleGroupList{userID: rgs})
+	missing, err := a.store.LoadRuleGroups(req.Context(), map[string]rulespb.RuleGroupList{userID: rgs})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(missing) > 0 {
+		// This API is expected to be strongly consistent, so it's an error if any rule group was missing.
+		http.Error(w, fmt.Sprintf("an error occurred while loading %d rule groups", len(missing)), http.StatusInternalServerError)
 		return
 	}
 
@@ -531,6 +536,8 @@ func (a *API) CreateRuleGroup(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	a.ruler.NotifySyncRulesAsync(userID)
+
 	respondAccepted(w, logger)
 }
 
@@ -553,6 +560,8 @@ func (a *API) DeleteNamespace(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	a.ruler.NotifySyncRulesAsync(userID)
+
 	respondAccepted(w, logger)
 }
 
@@ -574,6 +583,8 @@ func (a *API) DeleteRuleGroup(w http.ResponseWriter, req *http.Request) {
 		respondServerError(logger, w, err.Error())
 		return
 	}
+
+	a.ruler.NotifySyncRulesAsync(userID)
 
 	respondAccepted(w, logger)
 }

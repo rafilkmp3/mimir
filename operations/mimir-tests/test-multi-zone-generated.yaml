@@ -1774,7 +1774,6 @@ spec:
         - -blocks-storage.bucket-store.index-cache.memcached.max-item-size=5242880
         - -blocks-storage.bucket-store.index-header-lazy-loading-enabled=true
         - -blocks-storage.bucket-store.index-header-lazy-loading-idle-timeout=60m
-        - -blocks-storage.bucket-store.max-chunk-pool-bytes=12884901888
         - -blocks-storage.bucket-store.metadata-cache.backend=memcached
         - -blocks-storage.bucket-store.metadata-cache.memcached.addresses=dnssrvnoa+memcached-metadata.default.svc.cluster.local:11211
         - -blocks-storage.bucket-store.metadata-cache.memcached.max-async-concurrency=50
@@ -1801,6 +1800,9 @@ spec:
         - -store-gateway.sharding-ring.zone-awareness-enabled=true
         - -target=store-gateway
         - -usage-stats.installation-mode=jsonnet
+        env:
+        - name: GOMEMLIMIT
+          value: "12884901888"
         image: grafana/mimir:2.8.0
         imagePullPolicy: IfNotPresent
         name: store-gateway
@@ -1905,7 +1907,6 @@ spec:
         - -blocks-storage.bucket-store.index-cache.memcached.max-item-size=5242880
         - -blocks-storage.bucket-store.index-header-lazy-loading-enabled=true
         - -blocks-storage.bucket-store.index-header-lazy-loading-idle-timeout=60m
-        - -blocks-storage.bucket-store.max-chunk-pool-bytes=12884901888
         - -blocks-storage.bucket-store.metadata-cache.backend=memcached
         - -blocks-storage.bucket-store.metadata-cache.memcached.addresses=dnssrvnoa+memcached-metadata.default.svc.cluster.local:11211
         - -blocks-storage.bucket-store.metadata-cache.memcached.max-async-concurrency=50
@@ -1932,6 +1933,9 @@ spec:
         - -store-gateway.sharding-ring.zone-awareness-enabled=true
         - -target=store-gateway
         - -usage-stats.installation-mode=jsonnet
+        env:
+        - name: GOMEMLIMIT
+          value: "12884901888"
         image: grafana/mimir:2.8.0
         imagePullPolicy: IfNotPresent
         name: store-gateway
@@ -2036,7 +2040,6 @@ spec:
         - -blocks-storage.bucket-store.index-cache.memcached.max-item-size=5242880
         - -blocks-storage.bucket-store.index-header-lazy-loading-enabled=true
         - -blocks-storage.bucket-store.index-header-lazy-loading-idle-timeout=60m
-        - -blocks-storage.bucket-store.max-chunk-pool-bytes=12884901888
         - -blocks-storage.bucket-store.metadata-cache.backend=memcached
         - -blocks-storage.bucket-store.metadata-cache.memcached.addresses=dnssrvnoa+memcached-metadata.default.svc.cluster.local:11211
         - -blocks-storage.bucket-store.metadata-cache.memcached.max-async-concurrency=50
@@ -2063,6 +2066,9 @@ spec:
         - -store-gateway.sharding-ring.zone-awareness-enabled=true
         - -target=store-gateway
         - -usage-stats.installation-mode=jsonnet
+        env:
+        - name: GOMEMLIMIT
+          value: "12884901888"
         image: grafana/mimir:2.8.0
         imagePullPolicy: IfNotPresent
         name: store-gateway
