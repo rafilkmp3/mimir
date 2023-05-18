@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VividCortex/ewma"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/gogo/status"
@@ -47,8 +48,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 
-	"github.com/grafana/mimir/pkg/util/shutdownmarker"
-
 	"github.com/grafana/dskit/tenant"
 
 	"github.com/grafana/mimir/pkg/ingester/activeseries"
@@ -65,6 +64,7 @@ import (
 	util_log "github.com/grafana/mimir/pkg/util/log"
 	util_math "github.com/grafana/mimir/pkg/util/math"
 	"github.com/grafana/mimir/pkg/util/push"
+	"github.com/grafana/mimir/pkg/util/shutdownmarker"
 	"github.com/grafana/mimir/pkg/util/spanlogger"
 	"github.com/grafana/mimir/pkg/util/validation"
 )
@@ -295,6 +295,7 @@ type Ingester struct {
 	lastCPUTime atomic.Float64
 	// Last time resource utilization was computed
 	lastResourceUtilizationUpdate atomic.Time
+	movingAvg                     ewma.MovingAverage
 }
 
 func newIngester(cfg Config, limits *validation.Overrides, registerer prometheus.Registerer, logger log.Logger) (*Ingester, error) {
@@ -335,6 +336,8 @@ func newIngester(cfg Config, limits *validation.Overrides, registerer prometheus
 		// TODO: Parameterize thresholds
 		readPathCPUThreshold:    0.8 * cfg.CPUUtilizationTarget,
 		readPathMemoryThreshold: uint64(0.8 * float64(cfg.MemoryUtilizationTarget)),
+		// Use a minute long window, each sample being a second apart
+		movingAvg: ewma.NewMovingAverage(60),
 	}, nil
 }
 
